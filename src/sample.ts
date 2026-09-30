@@ -4,6 +4,8 @@ export const sampleScript: Script = {
   title: '潮汐之后',
   writer: '林简',
   draft: '第六稿 · 2026-09-24',
+  storySceneIds: ['scene-1', 'scene-2', 'scene-3', 'scene-4'],
+  shootSceneIds: ['scene-1', 'scene-2', 'scene-4', 'scene-3'],
   characters: [
     { id: 'char-lin', name: '林默', actor: '程野', introducedSceneId: 'scene-1', note: '退役潜水员，怕深水。' },
     { id: 'char-su', name: '苏遥', actor: '顾清', introducedSceneId: 'scene-1', note: '地方记者，随身录音笔。' },

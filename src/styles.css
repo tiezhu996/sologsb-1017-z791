@@ -89,6 +89,18 @@ mark { padding: 0 .1em; color: #3a2414; background: #f1d486; border-radius: 2px;
 .library-card { display: grid; gap: 12px; padding: 15px; border: 1px solid #ddd3c5 !important; border-radius: 11px !important; }
 .timeline-card { grid-template-columns: minmax(150px, 1.2fr) 1fr 120px auto; align-items: center; }
 .shortcut-grid { display: grid; grid-template-columns: 160px 1fr; gap: 12px; align-items: center; }
+
+/* 拍摄排期批次 */
+.schedule-banner { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; padding: 16px 18px; border: 1px solid #cda77f !important; border-left: 4px solid #c77a22 !important; border-radius: 12px !important; background: #fff7ea !important; }
+.schedule-list { display: grid; gap: 10px; }
+.schedule-row { display: flex; align-items: stretch; gap: 14px; padding: 12px 16px; border: 1px solid #d8d0c4 !important; border-radius: 11px !important; }
+.schedule-row.moved { border-color: #b68a5d !important; background: #fffaf0 !important; }
+.schedule-position { display: grid; place-items: center; align-content: center; gap: 2px; min-width: 46px; padding-right: 14px; border-right: 1px solid #e4ddd2; }
+.schedule-position strong { font-family: Georgia, serif; font-size: 22px; color: #8a6a4d; }
+.schedule-position small { color: #a45e16; font-size: 11px; }
+.schedule-row.moved .schedule-position strong { color: #a45e16; }
+.schedule-copy { cursor: pointer; min-width: 0; align-self: center; }
+.schedule-copy:focus-visible { outline: 2px solid #b68a5d; outline-offset: 3px; border-radius: 6px; }
 kbd { padding: 5px 8px; color: #fdf9f1; border-radius: 5px; background: #44382e; font: 600 12px/1.2 ui-monospace, monospace; }
 @media (max-width: 1050px) {
   .toolbar { flex-wrap: wrap; padding-top: 12px; padding-bottom: 12px; }

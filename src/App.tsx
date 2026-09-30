@@ -31,6 +31,7 @@ import {
 import {
   Add,
   Block,
+  CalendarMonth,
   CheckCircle,
   Close,
   Storage,
@@ -45,7 +46,7 @@ import {
   Undo,
   WarningAmber
 } from '@mui/icons-material'
-import { diffScript, useContinuityStore } from './store'
+import { diffScript, shootScenes, storyScenes, useContinuityStore } from './store'
 import type { RevisionColor, Scene, WarningItem, WarningStatus } from './types'
 
 const revisionOptions: Array<{ value: RevisionColor; label: string; color: string }> = [
@@ -70,7 +71,8 @@ function Highlight({ text, query }: { text: string; query: string }) {
   return <>{text.slice(0, index)}<mark>{text.slice(index, index + query.length)}</mark>{text.slice(index + query.length)}</>
 }
 
-function SceneCard({ scene, query, active, onOpen }: { scene: Scene; query: string; active: boolean; onOpen: () => void }) {
+function SceneCard({ scene, query, active, storyIndex, shootIndex, onOpen }: { scene: Scene; query: string; active: boolean; storyIndex: number; shootIndex: number; onOpen: () => void }) {
+  const reordered = storyIndex !== shootIndex
   return (
     <Paper
       component="article"
@@ -85,6 +87,10 @@ function SceneCard({ scene, query, active, onOpen }: { scene: Scene; query: stri
       <Box className="outline-copy">
         <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
           <Typography variant="h6"><Highlight text={scene.slug} query={query} /></Typography>
+          <Chip size="small" label={`故事第 ${storyIndex + 1} 场`} />
+          <Tooltip title={reordered ? '拍摄次序与故事顺序不同' : '拍摄次序与故事顺序一致'}>
+            <Chip size="small" color={reordered ? 'secondary' : 'default'} variant={reordered ? 'filled' : 'outlined'} label={`拍摄第 ${shootIndex + 1} 场`} />
+          </Tooltip>
           <Chip size="small" label={`${scene.intExt}. ${scene.location}`} />
           <Chip size="small" label={scene.dayNight} variant="outlined" />
           <Chip size="small" label={scene.status === 'locked' ? '锁定' : scene.status === 'review' ? '待审' : '草稿'} color={scene.status === 'review' ? 'warning' : 'default'} />
@@ -105,8 +111,16 @@ function SceneCard({ scene, query, active, onOpen }: { scene: Scene; query: stri
 export default function App() {
   const store = useContinuityStore()
   const { state, warnings } = store
-  const [selectedSceneId, setSelectedSceneId] = useState(state.script.scenes[0]?.id ?? '')
-  const [view, setView] = useState<'outline' | 'detail' | 'warnings' | 'versions'>('outline')
+  const storyList = useMemo(() => storyScenes(state.script), [state.script])
+  const shootList = useMemo(() => shootScenes(state.script), [state.script])
+  const draftScenes = useMemo(() => {
+    const map = new Map(state.script.scenes.map((scene) => [scene.id, scene]))
+    return (state.scheduleDraft?.draftShootSceneIds ?? []).map((sceneId) => map.get(sceneId)).filter((scene): scene is Scene => Boolean(scene))
+  }, [state.script.scenes, state.scheduleDraft])
+  const storyIndexById = useMemo(() => new Map(storyList.map((scene, index) => [scene.id, index])), [storyList])
+  const shootIndexById = useMemo(() => new Map(shootList.map((scene, index) => [scene.id, index])), [shootList])
+  const [selectedSceneId, setSelectedSceneId] = useState(storyList[0]?.id ?? '')
+  const [view, setView] = useState<'outline' | 'detail' | 'schedule' | 'warnings' | 'versions'>('outline')
   const [query, setQuery] = useState('')
   const [libraryOpen, setLibraryOpen] = useState(false)
   const [libraryTab, setLibraryTab] = useState('characters')
@@ -116,25 +130,32 @@ export default function App() {
   const [warningFilter, setWarningFilter] = useState<'all' | WarningStatus>('all')
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({})
   const [shortcutOpen, setShortcutOpen] = useState(false)
+  const [scheduleConfirmOpen, setScheduleConfirmOpen] = useState(false)
+  const [scheduleName, setScheduleName] = useState('')
+  const [scheduleError, setScheduleError] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
 
-  const selectedScene = state.script.scenes.find((scene) => scene.id === selectedSceneId) ?? state.script.scenes[0]
+  const selectedScene = state.script.scenes.find((scene) => scene.id === selectedSceneId) ?? storyList[0]
   const pendingWarnings = warnings.filter((warning) => (state.reviews[warning.id]?.status ?? 'pending') === 'pending')
   const visibleWarnings = warnings.filter((warning) => warningFilter === 'all' || (state.reviews[warning.id]?.status ?? 'pending') === warningFilter)
   const selectedVersion = state.versions.find((version) => version.id === selectedVersionId) ?? state.versions[0]
   const diff = useMemo(() => selectedVersion ? diffScript(selectedVersion.script, state.script) : [], [selectedVersion, state.script])
+  const activeDraft = state.scheduleDraft
+  const draftChanged = activeDraft
+    ? activeDraft.draftShootSceneIds.some((sceneId, index) => sceneId !== activeDraft.baseShootSceneIds[index])
+    : false
   const searchResults = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     if (!normalized) return []
-    return state.script.scenes.flatMap((scene) => searchFields.flatMap((field) => {
+    return storyList.flatMap((scene) => searchFields.flatMap((field) => {
       const value = String(scene[field] ?? '')
       return value.toLowerCase().includes(normalized) ? [{ scene, field, value }] : []
     }))
-  }, [query, state.script.scenes])
+  }, [query, storyList])
 
   useEffect(() => {
-    if (!state.script.scenes.some((scene) => scene.id === selectedSceneId)) setSelectedSceneId(state.script.scenes[0]?.id ?? '')
-  }, [selectedSceneId, state.script.scenes])
+    if (!state.script.scenes.some((scene) => scene.id === selectedSceneId)) setSelectedSceneId(storyList[0]?.id ?? '')
+  }, [selectedSceneId, state.script.scenes, storyList])
 
   useEffect(() => {
     const onKeydown = (event: KeyboardEvent) => {
@@ -142,6 +163,9 @@ export default function App() {
       if (command && event.key.toLowerCase() === 'f') {
         event.preventDefault()
         searchRef.current?.focus()
+      } else if (command && event.key.toLowerCase() === 'z' && !event.shiftKey && view === 'schedule' && state.scheduleDraft) {
+        event.preventDefault()
+        store.undoScheduleMove()
       } else if (command && event.key.toLowerCase() === 'z') {
         event.preventDefault()
         event.shiftKey ? store.redo() : store.undo()
@@ -155,22 +179,24 @@ export default function App() {
         event.preventDefault()
       } else if (event.key === 'Escape') {
         setQuery('')
+        setScheduleConfirmOpen(false)
       } else if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown') && selectedScene) {
         event.preventDefault()
+        // Alt+方向键调整的是故事顺序（连续性依据）；拍摄次序只在排期批次内改动。
         store.moveScene(selectedScene.id, event.key === 'ArrowUp' ? -1 : 1)
       } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
         if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
-        const index = state.script.scenes.findIndex((scene) => scene.id === selectedScene?.id)
+        const index = storyList.findIndex((scene) => scene.id === selectedScene?.id)
         const next = index + (event.key === 'ArrowLeft' ? -1 : 1)
-        if (state.script.scenes[next]) {
-          setSelectedSceneId(state.script.scenes[next].id)
+        if (storyList[next]) {
+          setSelectedSceneId(storyList[next].id)
           setView('detail')
         }
       }
     }
     window.addEventListener('keydown', onKeydown)
     return () => window.removeEventListener('keydown', onKeydown)
-  }, [selectedScene, state.script.scenes, store])
+  }, [selectedScene, storyList, view, state.scheduleDraft, store])
 
   function openScene(sceneId: string) {
     setSelectedSceneId(sceneId)
@@ -184,6 +210,18 @@ export default function App() {
     setVersionDialog(false)
   }
 
+  function confirmSchedule() {
+    const result = store.confirmScheduleBatch(scheduleName)
+    if (!result.ok) {
+      setScheduleError(result.error ?? '排期草稿无法确认。')
+      return
+    }
+    if (result.version) setSelectedVersionId(result.version.id)
+    setScheduleName('')
+    setScheduleError('')
+    setScheduleConfirmOpen(false)
+  }
+
   function renderOutline() {
     return (
       <Box>
@@ -191,12 +229,92 @@ export default function App() {
           <Box>
             <Typography className="eyebrow">SCREENPLAY OVERVIEW</Typography>
             <Typography variant="h4">故事大纲</Typography>
-            <Typography color="text.secondary">按当前场次顺序检查人物出场、道具建立与时间推进。</Typography>
+            <Typography color="text.secondary">按故事顺序检查人物出场、道具建立与时间推进；拍摄次序在“拍摄排期”中独立调整。</Typography>
           </Box>
           <Button variant="contained" startIcon={<Add />} onClick={() => { const sceneId = store.addScene(); setSelectedSceneId(sceneId); setView('detail') }}>新增场景</Button>
         </Stack>
         <Box className="outline-grid">
-          {state.script.scenes.map((scene) => <SceneCard key={scene.id} scene={scene} query={query} active={scene.id === selectedScene?.id} onOpen={() => openScene(scene.id)} />)}
+          {storyList.map((scene) => (
+            <SceneCard
+              key={scene.id}
+              scene={scene}
+              query={query}
+              active={scene.id === selectedScene?.id}
+              storyIndex={storyIndexById.get(scene.id) ?? 0}
+              shootIndex={shootIndexById.get(scene.id) ?? 0}
+              onOpen={() => openScene(scene.id)}
+            />
+          ))}
+        </Box>
+      </Box>
+    )
+  }
+
+  function renderSchedule() {
+    const draft = state.scheduleDraft
+    const rows = draft ? draftScenes : shootList
+    const baseIndex = new Map(draft?.baseShootSceneIds.map((sceneId, index) => [sceneId, index]) ?? [])
+    return (
+      <Box>
+        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={2} mb={2}>
+          <Box>
+            <Typography className="eyebrow">SHOOTING SCHEDULE</Typography>
+            <Typography variant="h4">拍摄排期</Typography>
+            <Typography color="text.secondary">拍摄次序与故事顺序分开维护，所有场次资料、警告与回复按场次身份关联，挪位不串场。</Typography>
+          </Box>
+          {!draft && (
+            <Button variant="contained" startIcon={<CalendarMonth />} onClick={() => { setScheduleError(''); store.startScheduleBatch() }}>开始调整排期</Button>
+          )}
+        </Stack>
+
+        {scheduleError && <Alert severity="error" sx={{ mb: 2 }} action={<Button size="small" onClick={() => setScheduleError('')}>知道了</Button>}>{scheduleError}</Alert>}
+
+        {draft && (
+          <Paper className="schedule-banner" elevation={0}>
+            <Box>
+              <Typography variant="h6">排期批次进行中 · 已挪动 {draft.moves.length} 步</Typography>
+              <Typography variant="body2" color="text.secondary">
+                改动先保存在可撤销批次里，{draftChanged ? '确认后会写入拍摄次序并自动保存一个版本快照' : '尚未产生与基础次序不同的挪动'}；取消或校验失败都会保留当前工作稿不动。
+              </Typography>
+            </Box>
+            <Stack direction="row" gap={1} flexWrap="wrap">
+              <Tooltip title="撤销最近一次挪动（⌘/Ctrl+Z）"><span><Button startIcon={<Undo />} disabled={!draft.undoStack.length} onClick={() => store.undoScheduleMove()}>撤销一步</Button></span></Tooltip>
+              <Button color="inherit" onClick={() => store.cancelScheduleBatch()}>取消批次</Button>
+              <Button variant="contained" startIcon={<CheckCircle />} disabled={!draftChanged} onClick={() => { setScheduleError(''); setScheduleConfirmOpen(true) }}>确认排期</Button>
+            </Stack>
+          </Paper>
+        )}
+
+        <Box className="schedule-list">
+          {rows.map((scene, index) => {
+            const fromIndex = draft ? baseIndex.get(scene.id) : index
+            const moved = draft && fromIndex !== undefined && fromIndex !== index
+            return (
+              <Paper key={scene.id} className={`schedule-row ${moved ? 'moved' : ''}`} elevation={0}>
+                <Box className="schedule-position">
+                  <strong>{index + 1}</strong>
+                  {moved && <small>原 {fromIndex! + 1}</small>}
+                </Box>
+                <Box className="schedule-copy" flex={1} onClick={() => openScene(scene.id)} role="button" tabIndex={0}
+                  onKeyDown={(event) => { if (event.key === 'Enter') openScene(scene.id) }}>
+                  <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+                    <Chip size="small" label={`场号 ${scene.number}`} />
+                    <Chip size="small" variant="outlined" label={`故事第 ${storyIndexById.get(scene.id)! + 1} 场`} />
+                    <Typography variant="h6">{scene.slug}</Typography>
+                    <Chip size="small" label={`${scene.intExt}. ${scene.location}`} variant="outlined" />
+                    <Chip size="small" label={scene.dayNight} variant="outlined" />
+                  </Stack>
+                  <Typography variant="body2" color="text.secondary" mt={.5}>{scene.synopsis || '尚未填写场景摘要。'}</Typography>
+                </Box>
+                {draft && (
+                  <Stack direction="column" gap={.5}>
+                    <IconButton size="small" disabled={index === 0} onClick={() => store.moveScheduleScene(scene.id, -1)}><NavigateBefore /></IconButton>
+                    <IconButton size="small" disabled={index === rows.length - 1} onClick={() => store.moveScheduleScene(scene.id, 1)}><NavigateNext /></IconButton>
+                  </Stack>
+                )}
+              </Paper>
+            )
+          })}
         </Box>
       </Box>
     )
@@ -220,14 +338,16 @@ export default function App() {
             />
             <Stack direction="row" gap={1} mt={1} flexWrap="wrap">
               <Chip label={`${sceneWarnings.length} 条检查`} color={sceneWarnings.length ? 'warning' : 'success'} size="small" />
+              <Chip label={`故事第 ${(storyIndexById.get(selectedScene.id) ?? 0) + 1} 场`} size="small" />
+              <Chip label={`拍摄第 ${(shootIndexById.get(selectedScene.id) ?? 0) + 1} 场`} size="small" color="secondary" variant="outlined" />
               <Chip label={`${selectedScene.pageLength.toFixed(2)} 页`} size="small" variant="outlined" />
               <Chip label={selectedScene.storyTime} size="small" variant="outlined" />
               {locked && <Chip icon={<Block />} label="场景已锁定" size="small" />}
             </Stack>
           </Box>
           <Stack direction="row" gap={1} flexWrap="wrap">
-            <Button variant="outlined" onClick={() => store.moveScene(selectedScene.id, -1)}>上移</Button>
-            <Button variant="outlined" onClick={() => store.moveScene(selectedScene.id, 1)}>下移</Button>
+            <Tooltip title="调整故事顺序（连续性检查依据），可用 Alt+↑/↓"><Button variant="outlined" onClick={() => store.moveScene(selectedScene.id, -1)}>故事前移</Button></Tooltip>
+            <Tooltip title="调整故事顺序（连续性检查依据），可用 Alt+↑/↓"><Button variant="outlined" onClick={() => store.moveScene(selectedScene.id, 1)}>故事后移</Button></Tooltip>
             <Button color="error" onClick={() => { store.deleteScene(selectedScene.id); setView('outline') }}>删除</Button>
           </Stack>
         </Stack>
@@ -501,30 +621,32 @@ export default function App() {
         <span>{store.saveStatus === 'saved' ? '● 已保存到本机' : '◌ 正在保存'}</span>
         <span>{state.script.scenes.length} 场 / {state.script.scenes.reduce((total, scene) => total + scene.pageLength, 0).toFixed(2)} 页</span>
         <span className={pendingWarnings.length ? 'attention' : ''}>{pendingWarnings.length} 条问题待审</span>
+        {state.scheduleDraft && <span className="attention">● 排期批次进行中（未确认前不影响当前工作稿）</span>}
         <span>所有修改自动保存在浏览器本地</span>
       </Box>
 
       <Box className="scene-rail">
         <IconButton size="small" onClick={() => {
-          const index = state.script.scenes.findIndex((scene) => scene.id === selectedScene?.id)
-          if (state.script.scenes[index - 1]) setSelectedSceneId(state.script.scenes[index - 1].id)
+          const index = storyList.findIndex((scene) => scene.id === selectedScene?.id)
+          if (storyList[index - 1]) setSelectedSceneId(storyList[index - 1].id)
         }}><NavigateBefore /></IconButton>
         <Stack direction="row" gap={1} className="scene-rail-list">
-          {state.script.scenes.map((scene) => (
-            <button key={scene.id} className={`rail-scene ${scene.id === selectedScene?.id ? 'active' : ''}`} onClick={() => openScene(scene.id)}>
+          {storyList.map((scene) => (
+            <button key={scene.id} className={`rail-scene ${scene.id === selectedScene?.id ? 'active' : ''}`} title={`故事第 ${storyIndexById.get(scene.id)! + 1} 场 · 拍摄第 ${shootIndexById.get(scene.id)! + 1} 场`} onClick={() => openScene(scene.id)}>
               <strong>{scene.number}</strong><span>{scene.slug}</span>
             </button>
           ))}
         </Stack>
         <IconButton size="small" onClick={() => {
-          const index = state.script.scenes.findIndex((scene) => scene.id === selectedScene?.id)
-          if (state.script.scenes[index + 1]) setSelectedSceneId(state.script.scenes[index + 1].id)
+          const index = storyList.findIndex((scene) => scene.id === selectedScene?.id)
+          if (storyList[index + 1]) setSelectedSceneId(storyList[index + 1].id)
         }}><NavigateNext /></IconButton>
       </Box>
 
       <Tabs value={view} onChange={(_, value) => setView(value)} variant="scrollable" className="view-tabs">
         <Tab value="outline" label="大纲视图" />
         <Tab value="detail" label="场景详情" />
+        <Tab value="schedule" label={state.scheduleDraft ? <Badge badgeContent="批" color="warning"><span className="tab-label">拍摄排期</span></Badge> : '拍摄排期'} />
         <Tab value="warnings" label={<Badge badgeContent={pendingWarnings.length} color="warning"><span className="tab-label">警告审阅</span></Badge>} />
         <Tab value="versions" label={<Badge badgeContent={state.versions.length} color="secondary"><span className="tab-label">版本差异</span></Badge>} />
       </Tabs>
@@ -549,6 +671,7 @@ export default function App() {
         )}
         {view === 'outline' && renderOutline()}
         {view === 'detail' && renderSceneDetail()}
+        {view === 'schedule' && renderSchedule()}
         {view === 'warnings' && renderWarnings()}
         {view === 'versions' && renderVersions()}
       </Box>
@@ -573,7 +696,7 @@ export default function App() {
                   <TextField label="姓名" value={character.name} onChange={(event) => store.updateCharacter(character.id, 'name', event.target.value)} />
                   <TextField label="演员" value={character.actor} onChange={(event) => store.updateCharacter(character.id, 'actor', event.target.value)} />
                   <TextField select label="首次建立场景" value={character.introducedSceneId} onChange={(event) => store.updateCharacter(character.id, 'introducedSceneId', event.target.value)}>
-                    {state.script.scenes.map((scene) => <MenuItem key={scene.id} value={scene.id}>场景 {scene.number} · {scene.slug}</MenuItem>)}
+                    {storyList.map((scene) => <MenuItem key={scene.id} value={scene.id}>故事第 {storyIndexById.get(scene.id)! + 1} 场 · 场号 {scene.number} · {scene.slug}</MenuItem>)}
                   </TextField>
                   <TextField label="创作备注" value={character.note} onChange={(event) => store.updateCharacter(character.id, 'note', event.target.value)} />
                 </Paper>
@@ -587,7 +710,7 @@ export default function App() {
                 <Paper className="library-card" key={prop.id}>
                   <TextField label="道具" value={prop.name} onChange={(event) => store.updateProp(prop.id, 'name', event.target.value)} />
                   <TextField select label="首次建立场景" value={prop.introducedSceneId} onChange={(event) => store.updateProp(prop.id, 'introducedSceneId', event.target.value)}>
-                    {state.script.scenes.map((scene) => <MenuItem key={scene.id} value={scene.id}>场景 {scene.number} · {scene.slug}</MenuItem>)}
+                    {storyList.map((scene) => <MenuItem key={scene.id} value={scene.id}>故事第 {storyIndexById.get(scene.id)! + 1} 场 · 场号 {scene.number} · {scene.slug}</MenuItem>)}
                   </TextField>
                   <TextField select label="持有人" value={prop.ownerId} onChange={(event) => store.updateProp(prop.id, 'ownerId', event.target.value)}>
                     {state.script.characters.map((character) => <MenuItem key={character.id} value={character.id}>{character.name}</MenuItem>)}
@@ -627,11 +750,12 @@ export default function App() {
           )}
           {libraryTab === 'timeline' && (
             <Stack gap={1.5}>
-              {state.script.scenes.map((scene, index) => (
+              <Typography variant="caption" color="text.secondary">时间线按故事顺序维护；拍摄次序请在“拍摄排期”中调整。</Typography>
+              {storyList.map((scene, index) => (
                 <Paper className="library-card timeline-card" key={scene.id}>
                   <Stack direction="row" alignItems="center" gap={1}>
-                    <Box className="scene-number small">{scene.number}</Box>
-                    <Typography fontWeight={750}>{scene.slug}</Typography>
+                    <Box className="scene-number small">{index + 1}</Box>
+                    <Typography fontWeight={750}>{scene.slug}<Typography component="span" variant="caption" color="text.secondary" ml={1}>场号 {scene.number}</Typography></Typography>
                   </Stack>
                   <TextField label="故事时间" value={scene.storyTime} onChange={(event) => store.updateScene(scene.id, 'storyTime', event.target.value)} />
                   <TextField select label="日夜" value={scene.dayNight} onChange={(event) => store.updateScene(scene.id, 'dayNight', event.target.value)}>
@@ -639,7 +763,7 @@ export default function App() {
                   </TextField>
                   <Stack direction="row" gap={1}>
                     <Button disabled={index === 0} onClick={() => store.moveScene(scene.id, -1)}>前移</Button>
-                    <Button disabled={index === state.script.scenes.length - 1} onClick={() => store.moveScene(scene.id, 1)}>后移</Button>
+                    <Button disabled={index === storyList.length - 1} onClick={() => store.moveScene(scene.id, 1)}>后移</Button>
                   </Stack>
                 </Paper>
               ))}
@@ -657,17 +781,32 @@ export default function App() {
         <DialogActions><Button onClick={() => setVersionDialog(false)}>取消</Button><Button variant="contained" onClick={createVersion}>保存</Button></DialogActions>
       </Dialog>
 
+      <Dialog open={scheduleConfirmOpen} onClose={() => setScheduleConfirmOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>确认排期调整</DialogTitle>
+        <DialogContent>
+          <Typography color="text.secondary" mb={2}>
+            确认后拍摄次序将写入工作稿，并自动保存一个版本快照（与既有版本并列，可在“版本差异”中比较或恢复）。
+            校验失败时不会写入，批次与工作稿都会原样保留。
+          </Typography>
+          <TextField autoFocus fullWidth label="快照名称（可选）" placeholder={`排期批次 · ${new Date().toLocaleString('zh-CN', { hour12: false })}`} value={scheduleName} onChange={(event) => setScheduleName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') confirmSchedule() }} />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setScheduleConfirmOpen(false)}>返回继续调整</Button>
+          <Button variant="contained" startIcon={<CheckCircle />} onClick={confirmSchedule}>确认并保存快照</Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog open={shortcutOpen} onClose={() => setShortcutOpen(false)} fullWidth maxWidth="xs">
         <DialogTitle>键盘快捷键</DialogTitle>
         <DialogContent>
           <Box className="shortcut-grid">
-            <kbd>⌘/Ctrl + Z</kbd><span>撤销</span>
+            <kbd>⌘/Ctrl + Z</kbd><span>撤销（排期批次内撤销最近一次挪动）</span>
             <kbd>⇧⌘/Ctrl + Z</kbd><span>重做</span>
             <kbd>⌘/Ctrl + F</kbd><span>聚焦全文搜索</span>
             <kbd>⌘/Ctrl + Enter</kbd><span>保存版本</span>
-            <kbd>Alt + ↑ / ↓</kbd><span>移动当前场景</span>
-            <kbd>← / →</kbd><span>前后切换场景</span>
-            <kbd>Esc</kbd><span>清除搜索</span>
+            <kbd>Alt + ↑ / ↓</kbd><span>调整当前场景的故事顺序</span>
+            <kbd>← / →</kbd><span>按故事顺序切换场景</span>
+            <kbd>Esc</kbd><span>清除搜索 / 关闭弹窗</span>
           </Box>
         </DialogContent>
         <DialogActions><Button onClick={() => setShortcutOpen(false)}>关闭</Button></DialogActions>
